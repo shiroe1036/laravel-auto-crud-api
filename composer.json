@@ -1,0 +1,46 @@
+{
+    "name": "fivotech/laravel-auto-crud",
+    "description": "A Laravel package for automatic CRUD operations with dynamic query building and route generation",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "FivoTech",
+            "email": "your-email@example.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^10.0|^11.0|^12.0",
+        "illuminate/database": "^10.0|^11.0|^12.0",
+        "illuminate/http": "^10.0|^11.0|^12.0",
+        "illuminate/routing": "^10.0|^11.0|^12.0",
+        "illuminate/console": "^10.0|^11.0|^12.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0",
+        "orchestra/testbench": "^8.0|^9.0|^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "FivoTech\\LaravelAutoCrud\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "FivoTech\\LaravelAutoCrud\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "FivoTech\\LaravelAutoCrud\\Providers\\AutoCrudServiceProvider"
+            ],
+            "aliases": {
+                "AutoCrud": "FivoTech\\LaravelAutoCrud\\Facades\\AutoCrud"
+            }
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
