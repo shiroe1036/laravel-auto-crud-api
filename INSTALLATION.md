@@ -8,12 +8,12 @@ Add the package to your Laravel project's composer.json:
 {
     "repositories": [
         {
-            "type": "path",
-            "url": "./packages/laravel-auto-crud"
+            "type": "vcs",
+            "url": "https://github.com/shiroe1036/laravel-auto-crud-api"
         }
     ],
     "require": {
-        "fivotech/laravel-auto-crud": "dev-main"
+        "fivotech/laravel-auto-crud": "@dev"
     }
 }
 ```
