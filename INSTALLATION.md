@@ -1,4 +1,278 @@
-# Installation and Setup Guide
+# Installation Guide
+
+## Quick Start for New Projects
+
+### 1. Install via Composer
+
+Add to your `composer.json`:
+```json
+{
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/shiroe1036/laravel-auto-crud-api"
+        }
+    ],
+    "require": {
+        "fivotech/laravel-auto-crud": "@dev"
+    }
+}
+```
+
+Then run:
+```bash
+composer update
+```
+
+### 2. Publish Configuration
+```bash
+php artisan vendor:publish --tag=auto-crud-config
+```
+
+### 3. Configure Models (New Projects)
+```php
+// config/auto-crud.php
+return [
+    'auto_generate_routes' => true,
+    'route_prefix' => 'api',
+    'prevent_route_conflicts' => true,
+    'models' => [
+        App\Models\User::class => [],
+        App\Models\Post::class => [
+            'exclude_methods' => ['destroy'],
+        ],
+    ],
+];
+```
+
+### 4. Generate Routes
+```bash
+php artisan auto-crud:generate-routes
+```
+
+## Safe Installation for Existing Projects
+
+⚠️ **Important**: For existing Laravel projects with routes in `api.php`, follow these steps to prevent conflicts.
+
+### 1. Install Package
+```bash
+composer require fivotech/laravel-auto-crud
+php artisan vendor:publish --tag=auto-crud-config
+```
+
+### 2. Use Safe Configuration
+The package ships with safe defaults. Verify your config:
+
+```php
+// config/auto-crud.php
+return [
+    // SAFE: Disabled by default
+    'auto_generate_routes' => false,
+
+    // SAFE: Isolated prefix prevents conflicts
+    'route_prefix' => 'auto-crud',
+
+    // SAFE: Conflict detection enabled
+    'prevent_route_conflicts' => true,
+
+    // SAFE: Isolated route naming
+    'route_name_pattern' => 'auto-crud.{resource}.{method}',
+
+    // SAFE: Auto-reset when config changes
+    'auto_reset_on_config_change' => true,
+
+    'models' => [
+        // Add your models here safely
+    ],
+];
+```
+
+### 3. Environment Configuration
+```env
+# Keep disabled initially
+AUTO_CRUD_GENERATE_ROUTES=false
+
+# Use isolated prefix
+AUTO_CRUD_ROUTE_PREFIX=auto-crud
+
+# Enable safety features
+AUTO_CRUD_PREVENT_CONFLICTS=true
+AUTO_CRUD_AUTO_RESET=true
+
+# Use isolated naming
+AUTO_CRUD_ROUTE_NAME_PATTERN=auto-crud.{resource}.{method}
+```
+
+### 4. Validate Before Enabling
+```bash
+# Check for potential conflicts
+php artisan auto-crud:generate-routes --validate
+
+# Preview what would be generated
+php artisan auto-crud:generate-routes --dry-run
+```
+
+### 5. Add Models Gradually
+```php
+// config/auto-crud.php
+'models' => [
+    App\Models\User::class => [
+        'exclude_methods' => ['destroy'], // Exclude dangerous operations
+        'middleware' => ['auth:sanctum'],  // Add authentication
+    ],
+],
+```
+
+### 6. Test and Enable
+```bash
+# Test with specific model
+php artisan auto-crud:generate-routes --model="App\Models\User" --dry-run
+
+# Generate when ready
+php artisan auto-crud:generate-routes
+
+# Enable auto-generation when confident
+# Set AUTO_CRUD_GENERATE_ROUTES=true in .env
+```
+
+## Verification Steps
+
+### Check Generated Routes
+```bash
+# View auto-generated routes
+php artisan auto-crud:reset-routes --show
+
+# View all Laravel routes
+php artisan route:list --name=auto-crud
+```
+
+### Test Route Endpoints
+With isolated configuration, your routes will be:
+```
+GET    /auto-crud/users           (instead of /api/users)
+POST   /auto-crud/users
+GET    /auto-crud/users/1
+PUT    /auto-crud/users/1
+DELETE /auto-crud/users/1
+GET    /auto-crud/users/paginate
+```
+
+## Troubleshooting Installation
+
+### Common Issues
+
+**Route Conflicts:**
+```bash
+# Solution: Use isolated configuration
+AUTO_CRUD_ROUTE_PREFIX=auto-crud
+AUTO_CRUD_ROUTE_NAME_PATTERN=auto-crud.{resource}.{method}
+```
+
+**Package Not Found:**
+```bash
+# Solution: Check repository configuration
+composer update --verbose
+```
+
+**Configuration Not Published:**
+```bash
+# Solution: Force republish
+php artisan vendor:publish --tag=auto-crud-config --force
+```
+
+**Routes Not Working:**
+```bash
+# Solution: Check generation status
+php artisan auto-crud:reset-routes --show
+
+# Regenerate if needed
+php artisan auto-crud:generate-routes --reset
+```
+
+## Migration from Manual Routes
+
+If you have existing manual CRUD routes:
+
+### 1. Document Existing Routes
+```bash
+php artisan route:list > existing_routes.txt
+```
+
+### 2. Use Isolated Configuration
+```php
+'route_prefix' => 'auto-crud',  // Keeps existing /api routes intact
+```
+
+### 3. Migrate Gradually
+```php
+// Start with one model
+'models' => [
+    App\Models\User::class => [],
+],
+
+// Add more models over time
+```
+
+### 4. Update Frontend Calls
+Change API calls from:
+```javascript
+// Old
+fetch('/api/users')
+
+// New (with isolated prefix)
+fetch('/auto-crud/users')
+```
+
+## Production Deployment
+
+### Environment Setup
+```env
+# Production environment
+AUTO_CRUD_GENERATE_ROUTES=true
+AUTO_CRUD_ROUTE_PREFIX=auto-crud
+AUTO_CRUD_PREVENT_CONFLICTS=true
+AUTO_CRUD_AUTO_RESET=false  # Disable auto-reset in production
+```
+
+### Deployment Script
+```bash
+#!/bin/bash
+# Reset routes for clean state
+php artisan auto-crud:reset-routes --all --force
+
+# Validate configuration
+php artisan auto-crud:generate-routes --validate
+
+# Generate routes if validation passes
+if [ $? -eq 0 ]; then
+    php artisan auto-crud:generate-routes
+    echo "✅ Routes generated successfully"
+else
+    echo "❌ Route conflicts detected"
+    exit 1
+fi
+
+# Clean up metadata
+php artisan auto-crud:reset-routes --cleanup
+```
+
+## Next Steps
+
+After installation:
+
+1. **Read the Documentation**: Check `README.md` for comprehensive usage
+2. **Review Commands**: See `COMMANDS_REFERENCE.md` for command details
+3. **Understand Route Management**: Read `ROUTE_MANAGEMENT.md`
+4. **Check Conflict Prevention**: Review `ROUTE_CONFLICT_PREVENTION.md`
+5. **Explore Examples**: Look at files in the `examples/` directory
+
+## Support
+
+If you encounter issues:
+1. Check the troubleshooting section above
+2. Validate your configuration with `--validate`
+3. Use `--dry-run` to preview changes
+4. Check the documentation files for detailed explanations
 
 ## Step 1: Install the Package
 

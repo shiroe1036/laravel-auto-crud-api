@@ -4,6 +4,7 @@ namespace FivoTech\LaravelAutoCrud\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use FivoTech\LaravelAutoCrud\Commands\GenerateRoutesCommand;
+use FivoTech\LaravelAutoCrud\Commands\ResetRoutesCommand;
 use FivoTech\LaravelAutoCrud\Services\AutoRouteGeneratorService;
 use FivoTech\LaravelAutoCrud\Services\GenericQueryBuilderService;
 
@@ -23,12 +24,16 @@ class AutoCrudServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 GenerateRoutesCommand::class,
+                ResetRoutesCommand::class,
             ]);
         }
 
         // Auto-generate routes if enabled in config
+        // Use booted() to ensure routes are registered AFTER route files are loaded
         if (config('auto-crud.auto_generate_routes', false)) {
-            $this->generateRoutes();
+            $this->app->booted(function () {
+                $this->generateRoutes();
+            });
         }
     }
 

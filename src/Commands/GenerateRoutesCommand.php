@@ -14,6 +14,8 @@ class GenerateRoutesCommand extends Command
                             {--scan : Scan for models automatically}
                             {--model= : Generate routes for specific model}
                             {--directory= : Directory to scan for models}
+                            {--validate : Validate routes without generating them}
+                            {--reset : Reset existing routes before generating new ones}
                             {--dry-run : Show what routes would be generated without actually generating them}';
 
     /**
@@ -36,6 +38,10 @@ class GenerateRoutesCommand extends Command
     {
         $this->info('🚀 Auto CRUD Route Generator');
         $this->newLine();
+
+        if ($this->option('validate')) {
+            return $this->validateRoutes();
+        }
 
         if ($this->option('model')) {
             return $this->generateForSpecificModel();
@@ -116,33 +122,64 @@ class GenerateRoutesCommand extends Command
         $models = config('auto-crud.models', []);
 
         if (empty($models)) {
-            $this->warn('No models configured in auto-crud.models config.');
-            $this->info('You can run with --scan to automatically discover models.');
-            return 0;
+            $this->warn('No models configured for auto-generation.');
+            $this->info('Add models to your config/auto-crud.php file or use --scan option.');
+            return 1;
         }
 
-        $this->info("📋 Generating routes from configuration...");
-        $this->info("Found " . count($models) . " configured model(s):");
-
-        foreach ($models as $modelClass => $config) {
-            $this->line("  - {$modelClass}");
+        // Reset existing routes if requested
+        if ($this->option('reset')) {
+            $this->info('🔄 Resetting existing routes...');
+            if (!$this->routeGenerator->resetGeneratedRoutes()) {
+                $this->error('Failed to reset existing routes.');
+                return 1;
+            }
+            $this->info('✅ Existing routes reset successfully.');
+            $this->newLine();
         }
-        $this->newLine();
 
         if ($this->option('dry-run')) {
-            foreach ($models as $modelClass => $config) {
-                $routeInfo = $this->routeGenerator->getModelRouteInfo($modelClass, $config);
+            $this->info('🔍 Dry run mode - showing routes that would be generated:');
+            $this->newLine();
+
+            foreach ($models as $modelClass => $modelConfig) {
+                $routeInfo = $this->routeGenerator->getModelRouteInfo($modelClass, $modelConfig);
+                $this->line("📁 Model: <fg=cyan>{$modelClass}</fg=cyan>");
                 $this->displayRouteInfo($routeInfo);
                 $this->newLine();
             }
-        } else {
-            $this->routeGenerator->generateRoutes();
-            $this->info("✅ Routes generated for all configured models");
+
+            return 0;
+        }
+
+        $this->info('🚀 Generating routes for configured models...');
+
+        $generated = 0;
+        foreach ($models as $modelClass => $modelConfig) {
+            if (class_exists($modelClass)) {
+                $this->routeGenerator->generateRoutesForModel($modelClass, $modelConfig);
+                $this->line("✅ Routes generated for: <fg=green>{$modelClass}</fg=green>");
+                $generated++;
+            } else {
+                $this->error("❌ Model class not found: {$modelClass}");
+            }
+        }
+
+        $this->newLine();
+        $this->info("✅ Route generation complete. Generated routes for {$generated} models.");
+
+        // Show conflicts if any
+        $conflicts = $this->routeGenerator->getConflicts();
+        if (!empty($conflicts)) {
+            $this->newLine();
+            $this->warn('⚠️  Some routes were skipped due to conflicts:');
+            foreach ($conflicts as $conflict) {
+                $this->line("  - {$conflict['model']}::{$conflict['method']} ({$conflict['reason']})");
+            }
         }
 
         return 0;
     }
-
     /**
      * Display route information
      */
@@ -171,5 +208,44 @@ class GenerateRoutesCommand extends Command
         }
 
         $this->table($headers, $rows);
+    }
+
+    /**
+     * Validate routes for conflicts
+     */
+    protected function validateRoutes(): int
+    {
+        $this->info('🔍 Validating routes for conflicts...');
+        $this->newLine();
+
+        $conflicts = $this->routeGenerator->validateRoutes();
+
+        if (empty($conflicts)) {
+            $this->info('✅ No route conflicts detected. All routes can be safely generated.');
+            return 0;
+        }
+
+        $this->error('⚠️  Route conflicts detected:');
+        $this->newLine();
+
+        $headers = ['Model', 'Method', 'HTTP', 'Pattern', 'Name', 'Reason'];
+        $rows = [];
+
+        foreach ($conflicts as $conflict) {
+            $rows[] = [
+                class_basename($conflict['model']),
+                $conflict['method'],
+                $conflict['http_method'],
+                $conflict['route_pattern'],
+                $conflict['route_name'],
+                $conflict['reason'],
+            ];
+        }
+
+        $this->table($headers, $rows);
+        $this->newLine();
+        $this->warn('💡 Consider using route namespacing or disabling auto-generation for conflicting models.');
+
+        return 1;
     }
 }

@@ -3,23 +3,142 @@
 namespace FivoTech\LaravelAutoCrud\Services;
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use Illuminate\Routing\Router;
 use ReflectionClass;
 use ReflectionMethod;
 
+/**
+ * Auto Route Generator Service
+ *
+ * Handles automatic CRUD route generation with conflict detection,
+ * metadata tracking, and route management capabilities.
+ */
 class AutoRouteGeneratorService
 {
     protected array $config;
+    protected array $conflictLog = [];
+    protected bool $preventConflicts = true;
+    protected string $metadataCacheKey = 'auto_crud_route_metadata';
 
     public function __construct()
     {
         $this->config = config('auto-crud', []);
+        $this->preventConflicts = $this->config['prevent_route_conflicts'] ?? true;
     }
+
+    // ========================================
+    // PUBLIC API - Route Generation
+    // ========================================
 
     /**
      * Generate routes for all configured models
      */
     public function generateRoutes(): void
+    {
+        $this->initializeGeneration();
+        $this->processConfiguredModels();
+        $this->handleConflictLogging();
+    }
+
+    /**
+     * Generate routes for a specific model
+     */
+    public function generateRoutesForModel(string $modelClass, array $modelConfig = []): void
+    {
+        $routeDefinition = $this->createRouteDefinition($modelClass, $modelConfig);
+        $this->registerModelRoutes($routeDefinition);
+    }
+
+    // ========================================
+    // PUBLIC API - Route Information
+    // ========================================
+
+    /**
+     * Get route information for a model
+     */
+    public function getModelRouteInfo(string $modelClass, array $modelConfig = []): array
+    {
+        $routeDefinition = $this->createRouteDefinition($modelClass, $modelConfig);
+        return $this->buildRouteInfo($routeDefinition);
+    }
+
+    /**
+     * Get all conflicts that were detected during route generation
+     */
+    public function getConflicts(): array
+    {
+        return $this->conflictLog;
+    }
+
+    // ========================================
+    // PUBLIC API - Model Discovery
+    // ========================================
+
+    /**
+     * Scan for models in the application
+     */
+    public function scanForModels(string $directory = null): array
+    {
+        $directory = $directory ?? app_path('Models');
+
+        if (!is_dir($directory)) {
+            return [];
+        }
+
+        return $this->discoverModelsInDirectory($directory);
+    }
+
+    /**
+     * Generate routes for discovered models
+     */
+    public function generateRoutesForDiscoveredModels(string $directory = null): array
+    {
+        $models = $this->scanForModels($directory);
+        $generatedRoutes = [];
+
+        foreach ($models as $modelClass) {
+            $this->generateRoutesForModel($modelClass);
+            $generatedRoutes[] = $modelClass;
+        }
+
+        return $generatedRoutes;
+    }
+
+    // ========================================
+    // PRIVATE METHODS - Route Generation Core
+    // ========================================
+
+    /**
+     * Initialize the route generation process
+     */
+    private function initializeGeneration(): void
+    {
+        $this->conflictLog = [];
+
+        // Check if we should skip generation entirely
+        if ($this->shouldSkipGeneration()) {
+            if (app()->runningInConsole()) {
+                echo "✓ Routes already generated and configuration unchanged. Skipping generation.\n";
+            }
+            return;
+        }
+
+        // Store current config hash for future comparisons
+        $this->storeConfigHash();
+
+        // Only attempt reset if explicitly requested via config
+        if ($this->config['auto_reset_on_config_change'] ?? false) {
+            // Clear metadata only - routes will be overridden
+            Cache::forget($this->metadataCacheKey);
+        }
+    }
+
+    /**
+     * Process all configured models
+     */
+    private function processConfiguredModels(): void
     {
         $models = $this->config['models'] ?? [];
 
@@ -29,96 +148,283 @@ class AutoRouteGeneratorService
     }
 
     /**
-     * Generate routes for a specific model
+     * Handle conflict logging after generation
      */
-    public function generateRoutesForModel(string $modelClass, array $modelConfig = []): void
+    private function handleConflictLogging(): void
     {
-        $controller = $modelConfig['controller'] ?? $this->config['default_controller'];
-        $resourceName = $this->getResourceName($modelClass, $modelConfig);
-        $middleware = array_merge(
-            $this->config['middleware'] ?? [],
-            $modelConfig['middleware'] ?? []
+        if (!empty($this->conflictLog) && $this->preventConflicts) {
+            $this->logRouteConflicts();
+        }
+    }
+
+    /**
+     * Create a route definition structure for a model
+     */
+    private function createRouteDefinition(string $modelClass, array $modelConfig): array
+    {
+        return [
+            'model' => $modelClass,
+            'config' => $modelConfig,
+            'controller' => $modelConfig['controller'] ?? $this->config['default_controller'],
+            'resource_name' => $this->getResourceName($modelClass, $modelConfig),
+            'middleware' => $this->mergeMiddleware($modelConfig),
+            'available_methods' => null, // Will be populated when needed
+        ];
+    }
+
+    /**
+     * Register routes for a model using its route definition
+     */
+    private function registerModelRoutes(array $routeDefinition): void
+    {
+        $routeDefinition['available_methods'] = $this->getAvailableMethods(
+            $routeDefinition['controller'],
+            $routeDefinition['config']
         );
 
-        $availableMethods = $this->getAvailableMethods($controller, $modelConfig);
+        $routeGroup = $this->createRouteGroup($routeDefinition['middleware']);
 
-        $routeGroup = Route::prefix($this->config['route_prefix'] ?? 'api')
-            ->middleware($middleware);
-
-        $routeGroup->group(function () use ($controller, $resourceName, $availableMethods, $modelClass, $modelConfig) {
-            foreach ($availableMethods as $method) {
-                $this->generateRouteForMethod($controller, $resourceName, $method, $modelClass, $modelConfig);
+        $routeGroup->group(function () use ($routeDefinition) {
+            foreach ($routeDefinition['available_methods'] as $method) {
+                $this->generateRouteForMethod($routeDefinition, $method);
             }
         });
     }
 
     /**
+     * Create a route group with proper configuration
+     */
+    private function createRouteGroup(array $middleware): \Illuminate\Routing\RouteRegistrar
+    {
+        $routeGroup = Route::prefix($this->config['route_prefix'] ?? 'api')
+            ->middleware($middleware);
+
+        if (!empty($this->config['route_namespace'])) {
+            $routeGroup = $routeGroup->namespace($this->config['route_namespace']);
+        }
+
+        return $routeGroup;
+    }
+
+    /**
+     * Merge middleware from global config and model config
+     */
+    private function mergeMiddleware(array $modelConfig): array
+    {
+        return array_merge(
+            $this->config['middleware'] ?? [],
+            $modelConfig['middleware'] ?? []
+        );
+    }
+
+    /**
      * Generate a route for a specific method
      */
-    protected function generateRouteForMethod(
-        string $controller,
-        string $resourceName,
-        string $method,
-        string $modelClass,
-        array $modelConfig
-    ): void {
-        $crudMethods = $this->config['crud_methods'] ?? [];
+    protected function generateRouteForMethod(array $routeDefinition, string $method): void
+    {
+        $methodInfo = $this->getMethodInfo($method, $routeDefinition);
 
-        if (!isset($crudMethods[$method])) {
+        if (!$methodInfo) {
             return;
         }
 
+        if ($this->shouldSkipRouteForConflict($methodInfo)) {
+            $this->logConflict($methodInfo, $routeDefinition);
+            return;
+        }
+
+        $this->createAndRegisterRoute($methodInfo, $routeDefinition);
+        $this->trackGeneratedRoute($methodInfo, $routeDefinition);
+    }
+
+    /**
+     * Get method information for route generation
+     */
+    private function getMethodInfo(string $method, array $routeDefinition): ?array
+    {
+        $crudMethods = $this->config['crud_methods'] ?? [];
+
+        if (!isset($crudMethods[$method])) {
+            return null;
+        }
+
         $methodConfig = $crudMethods[$method];
-        $httpMethod = strtolower($methodConfig['http_method']);
-        $routePattern = str_replace('{resource}', $resourceName, $methodConfig['route_pattern']);
+        $routePattern = str_replace('{resource}', $routeDefinition['resource_name'], $methodConfig['route_pattern']);
+        $routeName = $this->generateRouteName($routeDefinition['resource_name'], $method, $routeDefinition['config']);
 
-        $routeName = $this->generateRouteName($resourceName, $method, $modelConfig);
+        return [
+            'method' => $method,
+            'config' => $methodConfig,
+            'http_method' => strtolower($methodConfig['http_method']),
+            'route_pattern' => $routePattern,
+            'route_name' => $routeName,
+        ];
+    }
 
-        // Create the route with model binding and hooks support
-        $route = Route::{$httpMethod}($routePattern, function (...$args) use ($controller, $method, $modelClass, $modelConfig) {
-            $controllerInstance = new $controller();
+    /**
+     * Check if route should be skipped due to conflicts
+     */
+    private function shouldSkipRouteForConflict(array $methodInfo): bool
+    {
+        return $this->preventConflicts && $this->hasRouteConflict(
+            $methodInfo['route_pattern'],
+            $methodInfo['route_name'],
+            $methodInfo['http_method']
+        );
+    }
+
+    /**
+     * Log a route conflict
+     */
+    private function logConflict(array $methodInfo, array $routeDefinition): void
+    {
+        $this->conflictLog[] = [
+            'model' => $routeDefinition['model'],
+            'method' => $methodInfo['method'],
+            'route_pattern' => $methodInfo['route_pattern'],
+            'route_name' => $methodInfo['route_name'],
+            'http_method' => strtoupper($methodInfo['http_method']),
+            'reason' => 'Route pattern or name already exists'
+        ];
+    }
+
+    /**
+     * Create and register the actual route
+     */
+    private function createAndRegisterRoute(array $methodInfo, array $routeDefinition): void
+    {
+        $route = Route::{$methodInfo['http_method']}(
+            $methodInfo['route_pattern'],
+            $this->createRouteHandler($routeDefinition, $methodInfo['method'])
+        )->name($methodInfo['route_name']);
+
+        $this->applyRouteConstraints($route, $methodInfo['config']);
+    }
+
+    /**
+     * Create route handler closure
+     */
+    private function createRouteHandler(array $routeDefinition, string $method): \Closure
+    {
+        return function (...$args) use ($routeDefinition, $method) {
+            $controllerInstance = new $routeDefinition['controller']();
 
             if (method_exists($controllerInstance, 'setModel')) {
-                $controllerInstance->setModel($modelClass);
+                $controllerInstance->setModel($routeDefinition['model']);
             }
 
-            // Apply hooks if configured
-            if (isset($modelConfig['hooks'])) {
-                $controllerInstance = $this->applyHooksToController($controllerInstance, $modelConfig['hooks']);
-            }
-
-            // Apply global hooks
-            $globalHooks = $this->config['global_hooks'] ?? [];
-            if (!empty($globalHooks)) {
-                $controllerInstance = $this->applyHooksToController($controllerInstance, $globalHooks);
-            }
+            $controllerInstance = $this->applyHooksToController($controllerInstance, $routeDefinition);
 
             return call_user_func_array([$controllerInstance, $method], $args);
-        })->name($routeName);
+        };
+    }
 
-        // Apply route constraints if defined
+    /**
+     * Apply route constraints if defined
+     */
+    private function applyRouteConstraints($route, array $methodConfig): void
+    {
         if (isset($methodConfig['where']) && is_array($methodConfig['where'])) {
             $route->where($methodConfig['where']);
         }
     }
 
     /**
+     * Track a generated route in metadata
+     */
+    private function trackGeneratedRoute(array $methodInfo, array $routeDefinition): void
+    {
+        $metadata = Cache::get($this->metadataCacheKey, []);
+
+        $metadata[$methodInfo['route_name']] = [
+            'model' => $routeDefinition['model'],
+            'method' => $methodInfo['method'],
+            'pattern' => $methodInfo['route_pattern'],
+            'http_method' => strtoupper($methodInfo['http_method']),
+            'generated_at' => now()->toISOString(),
+        ];
+
+        Cache::put($this->metadataCacheKey, $metadata, now()->addDays(30));
+    }
+
+    /**
+     * Build route information for display/analysis
+     */
+    private function buildRouteInfo(array $routeDefinition): array
+    {
+        $routeDefinition['available_methods'] = $this->getAvailableMethods(
+            $routeDefinition['controller'],
+            $routeDefinition['config']
+        );
+
+        $routes = [];
+        foreach ($routeDefinition['available_methods'] as $method) {
+            $methodInfo = $this->getMethodInfo($method, $routeDefinition);
+            if ($methodInfo) {
+                $routes[] = [
+                    'method' => $method,
+                    'http_method' => $methodInfo['config']['http_method'],
+                    'pattern' => $methodInfo['route_pattern'],
+                    'name' => $methodInfo['route_name'],
+                    'controller' => $routeDefinition['controller'],
+                ];
+            }
+        }
+
+        return [
+            'model' => $routeDefinition['model'],
+            'resource_name' => $routeDefinition['resource_name'],
+            'controller' => $routeDefinition['controller'],
+            'routes' => $routes,
+        ];
+    }
+
+    /**
+     * Discover models in a directory
+     */
+    private function discoverModelsInDirectory(string $directory): array
+    {
+        $models = [];
+        $files = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($directory)
+        );
+
+        foreach ($files as $file) {
+            if ($file->isFile() && $file->getExtension() === 'php') {
+                $className = $this->getClassNameFromFile($file->getPathname());
+
+                if ($className && $this->isEloquentModel($className)) {
+                    $models[] = $className;
+                }
+            }
+        }
+
+        return $models;
+    }
+
+    /**
      * Apply hooks to controller instance
      */
-    protected function applyHooksToController($controllerInstance, array $hooks)
+    protected function applyHooksToController($controllerInstance, array $routeDefinition)
     {
+        $hooks = $routeDefinition['config']['hooks'] ?? [];
+        $globalHooks = $this->config['global_hooks'] ?? [];
+        $allHooks = array_merge($globalHooks, $hooks);
+
+        if (empty($allHooks)) {
+            return $controllerInstance;
+        }
+
         if (method_exists($controllerInstance, '__construct')) {
-            // If the controller supports hooks in constructor, pass them
             $reflection = new \ReflectionClass($controllerInstance);
             $constructor = $reflection->getConstructor();
 
             if ($constructor) {
                 $parameters = $constructor->getParameters();
                 foreach ($parameters as $parameter) {
-                    if ($parameter->getName() === 'options' && isset($hooks)) {
-                        // Recreate instance with hooks
+                    if ($parameter->getName() === 'options' && !empty($allHooks)) {
                         $model = $controllerInstance->model ?? null;
-                        return new ($reflection->getName())($model, ['hooks' => $hooks]);
+                        return new ($reflection->getName())($model, ['hooks' => $allHooks]);
                     }
                 }
             }
@@ -126,6 +432,10 @@ class AutoRouteGeneratorService
 
         return $controllerInstance;
     }
+
+    // ========================================
+    // PRIVATE METHODS - Model Analysis
+    // ========================================
 
     /**
      * Get available methods for a controller
@@ -218,35 +528,6 @@ class AutoRouteGeneratorService
     }
 
     /**
-     * Scan for models in the application
-     */
-    public function scanForModels(string $directory = null): array
-    {
-        $directory = $directory ?? app_path('Models');
-        $models = [];
-
-        if (!is_dir($directory)) {
-            return $models;
-        }
-
-        $files = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory)
-        );
-
-        foreach ($files as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
-                $className = $this->getClassNameFromFile($file->getPathname());
-
-                if ($className && $this->isEloquentModel($className)) {
-                    $models[] = $className;
-                }
-            }
-        }
-
-        return $models;
-    }
-
-    /**
      * Get class name from file
      */
     protected function getClassNameFromFile(string $filepath): ?string
@@ -282,54 +563,455 @@ class AutoRouteGeneratorService
             !$reflection->isAbstract();
     }
 
-    /**
-     * Generate routes for discovered models
-     */
-    public function generateRoutesForDiscoveredModels(string $directory = null): array
-    {
-        $models = $this->scanForModels($directory);
-        $generatedRoutes = [];
+    // ========================================
+    // PUBLIC API - Route Validation & Conflict Detection
+    // ========================================
 
-        foreach ($models as $modelClass) {
-            $this->generateRoutesForModel($modelClass);
-            $generatedRoutes[] = $modelClass;
+    /**
+     * Check if routes can be safely generated without conflicts
+     */
+    public function validateRoutes(): array
+    {
+        $originalPreventConflicts = $this->preventConflicts;
+        $originalConflictLog = $this->conflictLog;
+
+        // Enable conflict detection for validation
+        $this->preventConflicts = true;
+        $this->conflictLog = [];
+
+        // Simulate route generation to detect conflicts
+        $models = $this->config['models'] ?? [];
+        foreach ($models as $modelClass => $modelConfig) {
+            $this->validateModelRoutes($modelClass, $modelConfig);
         }
 
-        return $generatedRoutes;
+        $conflicts = $this->conflictLog;
+
+        // Restore original state
+        $this->preventConflicts = $originalPreventConflicts;
+        $this->conflictLog = $originalConflictLog;
+
+        return $conflicts;
     }
 
     /**
-     * Get route information for a model
+     * Check if a route conflicts with existing routes
      */
-    public function getModelRouteInfo(string $modelClass, array $modelConfig = []): array
+    protected function hasRouteConflict(string $routePattern, string $routeName, string $httpMethod): bool
     {
-        $controller = $modelConfig['controller'] ?? $this->config['default_controller'];
-        $resourceName = $this->getResourceName($modelClass, $modelConfig);
-        $availableMethods = $this->getAvailableMethods($controller, $modelConfig);
-        $routes = [];
+        $router = app('router');
+        $existingRoutes = $router->getRoutes();
 
-        foreach ($availableMethods as $method) {
-            $crudMethods = $this->config['crud_methods'] ?? [];
-            if (isset($crudMethods[$method])) {
-                $methodConfig = $crudMethods[$method];
-                $routePattern = str_replace('{resource}', $resourceName, $methodConfig['route_pattern']);
-                $routeName = $this->generateRouteName($resourceName, $method, $modelConfig);
+        // Check for route name conflicts
+        if ($existingRoutes->hasNamedRoute($routeName)) {
+            return true;
+        }
 
-                $routes[] = [
+        // Build full pattern with prefix
+        $prefix = $this->config['route_prefix'] ?? 'api';
+        $fullPattern = $prefix . '/' . ltrim($routePattern, '/');
+
+        // Check for route pattern conflicts
+        foreach ($existingRoutes as $route) {
+            // Only check routes with the same HTTP method
+            if (!in_array(strtoupper($httpMethod), $route->methods())) {
+                continue;
+            }
+
+            $existingPattern = $route->uri();
+
+            // Check for exact pattern match
+            if ($existingPattern === $fullPattern || $existingPattern === ltrim($routePattern, '/')) {
+                return true;
+            }
+
+            // Check for potential parameter conflicts
+            if ($this->patternsConflict($fullPattern, $existingPattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Validate routes for a specific model without actually creating them
+     */
+    protected function validateModelRoutes(string $modelClass, array $modelConfig): void
+    {
+        $routeDefinition = $this->createRouteDefinition($modelClass, $modelConfig);
+        $routeDefinition['available_methods'] = $this->getAvailableMethods(
+            $routeDefinition['controller'],
+            $routeDefinition['config']
+        );
+
+        foreach ($routeDefinition['available_methods'] as $method) {
+            $methodInfo = $this->getMethodInfo($method, $routeDefinition);
+            if (!$methodInfo) {
+                continue;
+            }
+
+            if ($this->hasRouteConflict($methodInfo['route_pattern'], $methodInfo['route_name'], $methodInfo['http_method'])) {
+                $this->conflictLog[] = [
+                    'model' => $modelClass,
                     'method' => $method,
-                    'http_method' => $methodConfig['http_method'],
-                    'pattern' => $routePattern,
-                    'name' => $routeName,
-                    'controller' => $controller,
+                    'route_pattern' => $methodInfo['route_pattern'],
+                    'route_name' => $methodInfo['route_name'],
+                    'http_method' => strtoupper($methodInfo['http_method']),
+                    'reason' => 'Route pattern or name already exists'
+                ];
+            }
+        }
+    }
+
+    /**
+     * Check if two route patterns could conflict
+     */
+    protected function patternsConflict(string $pattern1, string $pattern2): bool
+    {
+        // Remove leading slashes for comparison
+        $pattern1 = ltrim($pattern1, '/');
+        $pattern2 = ltrim($pattern2, '/');
+
+        // Skip if patterns are identical (handled elsewhere)
+        if ($pattern1 === $pattern2) {
+            return false;
+        }
+
+        // Split patterns into segments
+        $segments1 = explode('/', $pattern1);
+        $segments2 = explode('/', $pattern2);
+
+        // Different number of segments usually means no conflict
+        if (count($segments1) !== count($segments2)) {
+            return false;
+        }
+
+        $hasParameterOverlap = false;
+
+        // Compare each segment
+        for ($i = 0; $i < count($segments1); $i++) {
+            $seg1 = $segments1[$i];
+            $seg2 = $segments2[$i];
+
+            // If both are parameters, they could conflict
+            if ($this->isParameter($seg1) && $this->isParameter($seg2)) {
+                $hasParameterOverlap = true;
+                continue;
+            }
+
+            // If both are identical literals, continue
+            if ($seg1 === $seg2) {
+                continue;
+            }
+
+            // If one is parameter and other is literal, potential conflict only if other segments match
+            if ($this->isParameter($seg1) || $this->isParameter($seg2)) {
+                $hasParameterOverlap = true;
+                continue;
+            }
+
+            // Different literals, no conflict
+            return false;
+        }
+
+        // Only conflict if there was parameter overlap and other segments matched
+        return $hasParameterOverlap;
+    }
+
+    /**
+     * Check if a route segment is a parameter
+     */
+    protected function isParameter(string $segment): bool
+    {
+        return strpos($segment, '{') === 0 && strpos($segment, '}') === strlen($segment) - 1;
+    }
+
+    /**
+     * Log route conflicts
+     */
+    protected function logRouteConflicts(): void
+    {
+        if (function_exists('logger')) {
+            logger()->warning('Auto CRUD route conflicts detected', [
+                'conflicts' => $this->conflictLog,
+                'package' => 'laravel-auto-crud'
+            ]);
+        }
+
+        // Also log to Laravel log if in console mode
+        if (app()->runningInConsole()) {
+            echo "\n⚠️  Route Conflicts Detected:\n";
+            foreach ($this->conflictLog as $conflict) {
+                echo "  - {$conflict['model']}::{$conflict['method']} -> {$conflict['http_method']} {$conflict['route_pattern']} (Reason: {$conflict['reason']})\n";
+            }
+            echo "\n";
+        }
+    }
+
+    // ========================================
+    // PUBLIC API - Route Metadata Management
+    // ========================================
+
+    /**
+     * Get metadata for all generated routes
+     */
+    public function getGeneratedRoutesMetadata(): array
+    {
+        return Cache::get($this->metadataCacheKey, []);
+    }
+
+    /**
+     * Get metadata for routes of specific models
+     */
+    public function getModelRoutesMetadata(array $modelClasses): array
+    {
+        $metadata = Cache::get($this->metadataCacheKey, []);
+
+        return array_filter($metadata, function ($routeData) use ($modelClasses) {
+            return in_array($routeData['model'], $modelClasses);
+        });
+    }
+
+    /**
+     * Check if any routes are currently generated
+     */
+    public function hasGeneratedRoutes(): bool
+    {
+        $metadata = Cache::get($this->metadataCacheKey, []);
+        return !empty($metadata);
+    }
+
+    /**
+     * Get count of generated routes by model
+     */
+    public function getGeneratedRoutesCount(): array
+    {
+        $metadata = Cache::get($this->metadataCacheKey, []);
+        $counts = [];
+
+        foreach ($metadata as $routeData) {
+            $model = $routeData['model'];
+            $counts[$model] = ($counts[$model] ?? 0) + 1;
+        }
+
+        return $counts;
+    }
+
+    /**
+     * Validate if generated routes still exist in router
+     */
+    public function validateGeneratedRoutes(): array
+    {
+        $metadata = Cache::get($this->metadataCacheKey, []);
+        $router = app('router');
+        $routes = $router->getRoutes();
+        $issues = [];
+
+        foreach ($metadata as $routeName => $routeData) {
+            if (!$routes->hasNamedRoute($routeName)) {
+                $issues[] = [
+                    'route_name' => $routeName,
+                    'model' => $routeData['model'],
+                    'issue' => 'Route no longer exists in router',
+                    'metadata' => $routeData
                 ];
             }
         }
 
-        return [
-            'model' => $modelClass,
-            'resource_name' => $resourceName,
-            'controller' => $controller,
-            'routes' => $routes,
+        return $issues;
+    }
+
+    /**
+     * Clean up stale metadata (routes that no longer exist)
+     */
+    public function cleanupStaleMetadata(): int
+    {
+        $metadata = Cache::get($this->metadataCacheKey, []);
+        $router = app('router');
+        $routes = $router->getRoutes();
+        $cleaned = 0;
+
+        foreach ($metadata as $routeName => $routeData) {
+            if (!$routes->hasNamedRoute($routeName)) {
+                unset($metadata[$routeName]);
+                $cleaned++;
+            }
+        }
+
+        if ($cleaned > 0) {
+            Cache::put($this->metadataCacheKey, $metadata, now()->addDays(30));
+        }
+
+        return $cleaned;
+    }
+
+    // ========================================
+    // PUBLIC API - Route Reset Management
+    // ========================================
+
+    /**
+     * Reset/remove all generated routes
+     * Note: Laravel doesn't support removing routes after registration.
+     * This method clears metadata and logs a warning.
+     */
+    public function resetGeneratedRoutes(): bool
+    {
+        try {
+            $metadata = Cache::get($this->metadataCacheKey, []);
+
+            if (empty($metadata)) {
+                return true; // Nothing to reset
+            }
+
+            // Laravel doesn't support removing routes after they're registered
+            // We can only clear the metadata and warn the user
+            $this->logRouteResetWarning(array_keys($metadata));
+
+            // Clear metadata
+            Cache::forget($this->metadataCacheKey);
+
+            return true;
+        } catch (\Exception $e) {
+            if (function_exists('logger')) {
+                logger()->error('Failed to reset auto-crud routes', [
+                    'error' => $e->getMessage(),
+                    'package' => 'laravel-auto-crud'
+                ]);
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Reset routes for specific models
+     * Note: Laravel doesn't support removing routes after registration.
+     * This method clears metadata and logs a warning.
+     */
+    public function resetRoutesForModels(array $modelClasses): bool
+    {
+        try {
+            $metadata = Cache::get($this->metadataCacheKey, []);
+
+            if (empty($metadata)) {
+                return true; // Nothing to reset
+            }
+
+            $updatedMetadata = $metadata;
+            $removedRoutes = [];
+
+            // Find routes for specified models
+            foreach ($metadata as $routeName => $routeData) {
+                if (in_array($routeData['model'], $modelClasses)) {
+                    $removedRoutes[] = $routeName;
+                    unset($updatedMetadata[$routeName]);
+                }
+            }
+
+            if (!empty($removedRoutes)) {
+                $this->logRouteResetWarning($removedRoutes);
+            }
+
+            // Update metadata
+            Cache::put($this->metadataCacheKey, $updatedMetadata, now()->addDays(30));
+
+            return true;
+        } catch (\Exception $e) {
+            if (function_exists('logger')) {
+                logger()->error('Failed to reset routes for specific models', [
+                    'models' => $modelClasses,
+                    'error' => $e->getMessage(),
+                    'package' => 'laravel-auto-crud'
+                ]);
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Log warning about route reset limitations
+     */
+    private function logRouteResetWarning(array $routeNames): void
+    {
+        $message = 'Auto-CRUD route metadata cleared, but routes remain active until next request cycle. ' .
+                  'Consider restarting your application or clearing route cache.';
+
+        if (function_exists('logger')) {
+            logger()->warning($message, [
+                'routes_cleared' => $routeNames,
+                'package' => 'laravel-auto-crud'
+            ]);
+        }
+
+        if (app()->runningInConsole()) {
+            echo "\n⚠️  Route Reset Limitation:\n";
+            echo "   Laravel doesn't support removing routes after registration.\n";
+            echo "   Metadata cleared for " . count($routeNames) . " routes, but they remain active.\n";
+            echo "   Consider running: php artisan route:clear && php artisan route:cache\n\n";
+        }
+    }
+
+    /**
+     * Check if routes should be regenerated based on configuration changes
+     */
+    public function shouldRegenerateRoutes(): bool
+    {
+        if (!($this->config['auto_reset_on_config_change'] ?? true)) {
+            return false;
+        }
+
+        $currentConfigHash = $this->getConfigHash();
+        $cachedConfigHash = Cache::get('auto_crud_config_hash', null);
+
+        return $currentConfigHash !== $cachedConfigHash;
+    }
+
+    /**
+     * Store current configuration hash for change detection
+     */
+    public function storeConfigHash(): void
+    {
+        $configHash = $this->getConfigHash();
+        Cache::put('auto_crud_config_hash', $configHash, now()->addDays(30));
+    }
+
+    /**
+     * Get hash of current configuration for change detection
+     */
+    private function getConfigHash(): string
+    {
+        $relevantConfig = [
+            'models' => $this->config['models'] ?? [],
+            'crud_methods' => $this->config['crud_methods'] ?? [],
+            'route_prefix' => $this->config['route_prefix'] ?? 'api',
+            'route_namespace' => $this->config['route_namespace'] ?? '',
+            'middleware' => $this->config['middleware'] ?? [],
+            'default_controller' => $this->config['default_controller'] ?? '',
         ];
+
+        return md5(serialize($relevantConfig));
+    }
+
+    /**
+     * Prevent route generation if routes already exist and conflicts are disabled
+     */
+    private function shouldSkipGeneration(): bool
+    {
+        // If we don't prevent conflicts, always generate
+        if (!$this->preventConflicts) {
+            return false;
+        }
+
+        // If no routes are currently generated, don't skip
+        if (!$this->hasGeneratedRoutes()) {
+            return false;
+        }
+
+        // If configuration hasn't changed, skip generation
+        if (!$this->shouldRegenerateRoutes()) {
+            return true;
+        }
+
+        return false;
     }
 }

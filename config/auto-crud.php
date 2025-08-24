@@ -14,6 +14,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Auto Reset on Configuration Change
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, the package will automatically reset existing routes
+    | before generating new ones when the configuration changes.
+    |
+    */
+    'auto_reset_on_config_change' => env('AUTO_CRUD_AUTO_RESET', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Route Prefix
     |--------------------------------------------------------------------------
     |
@@ -34,6 +45,28 @@ return [
         'api',
         // 'auth:sanctum', // Uncomment if you need authentication
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Route Conflict Prevention
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, the package will check for existing routes before
+    | generating new ones to prevent conflicts with manually defined routes.
+    |
+    */
+    'prevent_route_conflicts' => env('AUTO_CRUD_PREVENT_CONFLICTS', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Route Namespace
+    |--------------------------------------------------------------------------
+    |
+    | Optional namespace to isolate auto-generated routes from existing ones.
+    | This helps prevent naming conflicts.
+    |
+    */
+    'route_namespace' => env('AUTO_CRUD_ROUTE_NAMESPACE', null),
 
     /*
     |--------------------------------------------------------------------------
@@ -79,6 +112,23 @@ return [
     |
     */
     'default_controller' => FivoTech\LaravelAutoCrud\Controllers\AutoCrudController::class,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Route Name Pattern
+    |--------------------------------------------------------------------------
+    |
+    | Pattern for generating route names. Available placeholders:
+    | {resource} - The resource name (e.g., 'users')
+    | {method} - The CRUD method (e.g., 'index', 'store')
+    |
+    | Examples:
+    | '{resource}.{method}' -> 'users.index'
+    | 'api.{resource}.{method}' -> 'api.users.index'
+    | 'auto-crud.{resource}.{method}' -> 'auto-crud.users.index' (isolated naming)
+    |
+    */
+    'route_name_pattern' => env('AUTO_CRUD_ROUTE_NAME_PATTERN', '{resource}.{method}'),
 
     /*
     |--------------------------------------------------------------------------

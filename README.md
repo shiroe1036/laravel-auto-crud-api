@@ -1,12 +1,14 @@
 # Laravel Auto CRUD Package
 
-A highly flexible and customizable Laravel package that provides automatic CRUD operations with dynamic query building and automatic route generation. Built with extensibility in mind, allowing developers to customize every aspect of the functionality through hooks and configuration.
+A highly flexible and customizable Laravel package that provides automatic CRUD operations with dynamic query building, automatic route generation, and comprehensive route management. Built with extensibility in mind, allowing developers to customize every aspect of the functionality through hooks and configuration.
 
 ## Features
 
 - 🚀 **Automatic Route Generation**: Generate CRUD routes automatically based on your models
-- 🔍 **Dynamic Query Builder**: Advanced query building with filters, relationships, pagination, and more
-- � **Highly Customizable**: Extensible through hooks and configuration
+- � **Route Management**: Track, reset, and manage generated routes with metadata
+- 🛡️ **Conflict Prevention**: Prevent route conflicts with existing routes in your application
+- �🔍 **Dynamic Query Builder**: Advanced query building with filters, relationships, pagination, and more
+- ⚙️ **Highly Customizable**: Extensible through hooks and configuration
 - 📝 **JSON Query Parameters**: Support for complex filtering via JSON query parameters
 - 🔄 **Relationship Handling**: Automatic handling of many-to-many relationships
 - 📄 **Pagination Support**: Built-in pagination with configurable limits
@@ -47,27 +49,57 @@ php artisan vendor:publish --tag=auto-crud-config
 
 ## Basic Usage
 
-### 1. Simple Configuration
+### 1. Safe Configuration for Existing Projects
 
-In `config/auto-crud.php`:
+For existing Laravel projects with existing routes in `api.php`, use the safe configuration:
 
 ```php
-'models' => [
-    App\Models\User::class => [],
-    App\Models\Post::class => [
-        'exclude_methods' => ['destroy'],
+// config/auto-crud.php
+return [
+    // Disabled by default to prevent conflicts
+    'auto_generate_routes' => false,
+
+    // Use isolated prefix to avoid conflicts
+    'route_prefix' => 'auto-crud',
+
+    // Prevent route conflicts (highly recommended)
+    'prevent_route_conflicts' => true,
+
+    // Use isolated namespace for route names
+    'route_name_pattern' => 'auto-crud.{resource}.{method}',
+
+    // Auto-reset routes when config changes
+    'auto_reset_on_config_change' => true,
+
+    'models' => [
+        App\Models\User::class => [],
+        App\Models\Post::class => [
+            'exclude_methods' => ['destroy'],
+        ],
     ],
-],
+];
 ```
 
-Enable auto-generation in `.env`:
+### 2. Environment Configuration
+
 ```env
-AUTO_CRUD_GENERATE_ROUTES=true
+# Route generation (disabled by default for safety)
+AUTO_CRUD_GENERATE_ROUTES=false
+
+# Use isolated prefix to prevent conflicts
+AUTO_CRUD_ROUTE_PREFIX=auto-crud
+
+# Enable conflict prevention
+AUTO_CRUD_PREVENT_CONFLICTS=true
+
+# Auto-reset when config changes
+AUTO_CRUD_AUTO_RESET=true
+
+# Use isolated route naming
+AUTO_CRUD_ROUTE_NAME_PATTERN=auto-crud.{resource}.{method}
 ```
 
-This automatically generates RESTful routes for your models!
-
-### 2. Using the Generic Query Builder
+### 3. Using the Generic Query Builder
 
 The package provides a powerful query builder for complex queries:
 
@@ -79,7 +111,7 @@ $users = $queryBuilder->getCollections();
 $paginatedUsers = $queryBuilder->getCollectionsPaginated();
 ```
 
-### 3. Extending the Base Controller
+### 4. Extending the Base Controller
 
 ```php
 use FivoTech\LaravelAutoCrud\Controllers\AutoCrudController;
@@ -94,6 +126,120 @@ class UserController extends AutoCrudController
     // All CRUD methods are handled automatically
     // Override specific methods if needed
 }
+```
+
+## Route Management Commands
+
+The package provides comprehensive route management with tracking and reset capabilities:
+
+### Route Generation Commands
+
+```bash
+# Validate routes for conflicts before generating
+php artisan auto-crud:generate-routes --validate
+
+# Generate routes with dry-run to preview
+php artisan auto-crud:generate-routes --dry-run
+
+# Generate routes with automatic reset of existing ones
+php artisan auto-crud:generate-routes --reset
+
+# Generate routes for all configured models
+php artisan auto-crud:generate-routes
+
+# Generate for specific model
+php artisan auto-crud:generate-routes --model="App\Models\User"
+
+# Scan and generate routes for all discovered models
+php artisan auto-crud:generate-routes --scan --directory="app/Models"
+```
+
+### Route Reset Commands
+
+```bash
+# Show current auto-generated routes
+php artisan auto-crud:reset-routes --show
+
+# Reset all auto-generated routes (with confirmation)
+php artisan auto-crud:reset-routes --all
+
+# Reset routes for specific models
+php artisan auto-crud:reset-routes --models="App\Models\User,App\Models\Post"
+
+# Force reset without confirmation (for scripts)
+php artisan auto-crud:reset-routes --all --force
+
+# Clean up stale metadata
+php artisan auto-crud:reset-routes --cleanup
+```
+
+### Development Workflow
+
+```bash
+# 1. Always validate first
+php artisan auto-crud:generate-routes --validate
+
+# 2. Preview with dry-run
+php artisan auto-crud:generate-routes --dry-run
+
+# 3. Generate with auto-reset for clean state
+php artisan auto-crud:generate-routes --reset
+
+# 4. Check what was generated
+php artisan auto-crud:reset-routes --show
+```
+
+## Route Conflict Prevention
+
+The package includes comprehensive conflict detection to safely work with existing Laravel routes:
+
+### Conflict Detection Features
+
+- **Route Name Conflicts**: Prevents duplicate route names
+- **Route Pattern Conflicts**: Detects conflicting URI patterns
+- **Parameter Conflicts**: Handles route parameter overlaps
+- **HTTP Method Conflicts**: Only checks conflicts for matching methods
+
+### Safe Integration with Existing Projects
+
+```php
+// Use isolated prefix to avoid conflicts
+'route_prefix' => 'auto-crud', // Routes become /auto-crud/users instead of /api/users
+
+// Use isolated route naming
+'route_name_pattern' => 'auto-crud.{resource}.{method}', // Routes named auto-crud.users.index
+
+// Enable conflict prevention
+'prevent_route_conflicts' => true, // Skip conflicting routes automatically
+```
+
+### Route Metadata Tracking
+
+Each generated route is tracked with metadata:
+
+```php
+[
+    'route_name' => [
+        'model' => 'App\Models\User',
+        'method' => 'index',
+        'pattern' => 'users',
+        'http_method' => 'GET',
+        'generated_at' => '2025-08-24T10:30:00Z'
+    ]
+]
+```
+
+### Route Validation Examples
+
+```bash
+# Check for potential conflicts
+php artisan auto-crud:generate-routes --validate
+
+# Example output:
+# ⚠️ Route conflicts detected:
+# Model    Method  HTTP  Pattern      Name              Reason
+# User     index   GET   api/users    users.index       Route name already exists
+# Post     show    GET   api/posts/1  posts.show        Route pattern conflicts
 ```
 
 ## Advanced Customization with Hooks
@@ -325,17 +471,108 @@ php artisan auto-crud:generate-routes --scan --dry-run
 
 ## Generated API Endpoints
 
-For each configured model, you get:
+For each configured model, you get these endpoints (with configurable prefix):
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/{resource}` | List all items |
-| POST | `/api/{resource}` | Create new item |
-| GET | `/api/{resource}/{id}` | Show specific item |
-| PUT | `/api/{resource}/{id}` | Update item |
-| DELETE | `/api/{resource}/{id}` | Delete item |
-| GET | `/api/{resource}/paginate` | Paginated list |
-| GET | `/api/{resource}/one` | Single item with query builder |
+| Method | Endpoint | Description | Route Name |
+|--------|----------|-------------|------------|
+| GET | `/auto-crud/{resource}` | List all items | `auto-crud.{resource}.index` |
+| POST | `/auto-crud/{resource}` | Create new item | `auto-crud.{resource}.store` |
+| GET | `/auto-crud/{resource}/{id}` | Show specific item | `auto-crud.{resource}.show` |
+| PUT | `/auto-crud/{resource}/{id}` | Update item | `auto-crud.{resource}.update` |
+| DELETE | `/auto-crud/{resource}/{id}` | Delete item | `auto-crud.{resource}.destroy` |
+| GET | `/auto-crud/{resource}/paginate` | Paginated list | `auto-crud.{resource}.paginate` |
+
+### Route Examples
+
+With default isolated configuration:
+```
+GET    /auto-crud/users           -> auto-crud.users.index
+POST   /auto-crud/users           -> auto-crud.users.store
+GET    /auto-crud/users/1         -> auto-crud.users.show
+PUT    /auto-crud/users/1         -> auto-crud.users.update
+DELETE /auto-crud/users/1         -> auto-crud.users.destroy
+GET    /auto-crud/users/paginate  -> auto-crud.users.paginate
+```
+
+### Customizing Route Patterns
+
+```php
+// config/auto-crud.php
+'route_prefix' => 'api/v2',           // Changes prefix to /api/v2/
+'route_name_pattern' => 'api.{resource}.{method}', // Changes names to api.users.index
+```
+
+## Migration Guide for Existing Projects
+
+### Step 1: Install Safely
+```bash
+composer require fivotech/laravel-auto-crud
+php artisan vendor:publish --tag=auto-crud-config
+```
+
+### Step 2: Use Safe Configuration
+```php
+// config/auto-crud.php - Safe defaults
+return [
+    'auto_generate_routes' => false,        // Disabled by default
+    'route_prefix' => 'auto-crud',          // Isolated prefix
+    'prevent_route_conflicts' => true,      // Enable conflict detection
+    'route_name_pattern' => 'auto-crud.{resource}.{method}',
+    'models' => [
+        // Add your models here
+    ],
+];
+```
+
+### Step 3: Validate Before Enabling
+```bash
+php artisan auto-crud:generate-routes --validate
+```
+
+### Step 4: Test with Dry Run
+```bash
+php artisan auto-crud:generate-routes --dry-run
+```
+
+### Step 5: Enable Gradually
+```php
+'auto_generate_routes' => true, // Enable when ready
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Route Conflicts:**
+```bash
+# Check for conflicts
+php artisan auto-crud:generate-routes --validate
+
+# Use isolated prefix
+AUTO_CRUD_ROUTE_PREFIX=auto-crud
+
+# Use isolated naming
+AUTO_CRUD_ROUTE_NAME_PATTERN=auto-crud.{resource}.{method}
+```
+
+**Stale Routes:**
+```bash
+# Clean up old routes
+php artisan auto-crud:reset-routes --cleanup
+
+# Reset all and regenerate
+php artisan auto-crud:reset-routes --all
+php artisan auto-crud:generate-routes
+```
+
+**Route Not Working:**
+```bash
+# Check current routes
+php artisan auto-crud:reset-routes --show
+
+# Validate metadata consistency
+php artisan auto-crud:reset-routes --cleanup
+```
 
 ## Why This Package?
 
@@ -345,6 +582,88 @@ For each configured model, you get:
 ✅ **Security**: Flexible authorization through hooks
 ✅ **Maintainability**: Consistent patterns across your application
 ✅ **Extensibility**: Add any custom logic through the hook system
+✅ **Safe Integration**: Conflict prevention ensures compatibility with existing routes
+✅ **Route Management**: Track, reset, and manage generated routes comprehensively
+✅ **Production Ready**: Enterprise-level route management with metadata tracking
+
+## Advanced Features
+
+### Route Metadata API
+
+```php
+use FivoTech\LaravelAutoCrud\Services\AutoRouteGeneratorService;
+
+$routeGenerator = app(AutoRouteGeneratorService::class);
+
+// Check if routes are generated
+$hasRoutes = $routeGenerator->hasGeneratedRoutes();
+
+// Get all route metadata
+$metadata = $routeGenerator->getGeneratedRoutesMetadata();
+
+// Get routes for specific models
+$userRoutes = $routeGenerator->getModelRoutesMetadata(['App\Models\User']);
+
+// Get route counts by model
+$counts = $routeGenerator->getGeneratedRoutesCount();
+
+// Validate route consistency
+$issues = $routeGenerator->validateGeneratedRoutes();
+
+// Clean up stale metadata
+$cleaned = $routeGenerator->cleanupStaleMetadata();
+```
+
+### Automated Deployment Workflow
+
+```bash
+#!/bin/bash
+# deployment-script.sh
+
+# Reset all routes for clean state
+php artisan auto-crud:reset-routes --all --force
+
+# Validate configuration
+php artisan auto-crud:generate-routes --validate
+
+# Generate routes if validation passes
+if [ $? -eq 0 ]; then
+    php artisan auto-crud:generate-routes
+    echo "Routes generated successfully"
+else
+    echo "Route conflicts detected, manual review required"
+    exit 1
+fi
+
+# Clean up any stale metadata
+php artisan auto-crud:reset-routes --cleanup
+```
+
+### Configuration Templates
+
+**For New Projects:**
+```php
+// config/auto-crud.php - New project configuration
+return [
+    'auto_generate_routes' => true,
+    'route_prefix' => 'api',
+    'prevent_route_conflicts' => true,
+    'route_name_pattern' => '{resource}.{method}',
+    // ... other settings
+];
+```
+
+**For Existing Projects:**
+```php
+// config/auto-crud.php - Existing project configuration
+return [
+    'auto_generate_routes' => false,         // Manual control
+    'route_prefix' => 'auto-crud',           // Isolated prefix
+    'prevent_route_conflicts' => true,       // Mandatory for existing projects
+    'route_name_pattern' => 'auto-crud.{resource}.{method}', // Isolated naming
+    // ... other settings
+];
+```
 
 ## Contributing
 
