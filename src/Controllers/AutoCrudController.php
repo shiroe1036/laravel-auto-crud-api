@@ -240,7 +240,7 @@ class AutoCrudController extends Controller implements AutoCrudControllerInterfa
     /**
      * Show a specific item
      */
-    public function show(int $id, ?Request $request = null): JsonResponse
+    public function show(int|string $id, ?Request $request = null): JsonResponse
     {
         $request = $request ?? request();
 
@@ -268,7 +268,7 @@ class AutoCrudController extends Controller implements AutoCrudControllerInterfa
     /**
      * Update an existing item
      */
-    public function update(int $id, ?Request $request = null): JsonResponse
+    public function update(int|string $id, ?Request $request = null): JsonResponse
     {
         $request = $request ?? request();
 
@@ -322,8 +322,10 @@ class AutoCrudController extends Controller implements AutoCrudControllerInterfa
     /**
      * Delete an item
      */
-    public function destroy(Request $request, int $id): JsonResponse
+    public function destroy(int|string $id, ?Request $request = null): JsonResponse
     {
+        $request = $request ?? request();
+
         if (!$this->isAuthorized($request, 'destroy')) {
             return \response()->json(['message' => 'Unauthorized'], 403);
         }
