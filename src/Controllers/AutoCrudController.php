@@ -167,11 +167,30 @@ class AutoCrudController extends Controller implements AutoCrudControllerInterfa
             // Handle bulk insert mode
             if (isset($dataRequest[0]['isUseInsertMode'])) {
                 unset($dataRequest[0]);
+                // Reindex after removing the flag element to avoid potential issues
+                $dataRequest = array_values($dataRequest);
 
                 // Execute bulk preprocessing hook if provided
                 $preprocessedBulkData = $this->executeHook('preprocess_bulk_data', $dataRequest, $request, $this->model);
                 if ($preprocessedBulkData !== null) {
                     $dataRequest = $preprocessedBulkData;
+                }
+
+                // If the model uses UUID (non-incrementing string PK), ensure each row has an ID
+                if ($this->model) {
+                    $modelInstance = new $this->model;
+                    $primaryKey = $modelInstance->getKeyName();
+                    $incrementing = $modelInstance->getIncrementing();
+                    $keyType = method_exists($modelInstance, 'getKeyType') ? $modelInstance->getKeyType() : 'int';
+
+                    if ($incrementing === false && $keyType === 'string') {
+                        $dataRequest = array_map(function ($row) use ($primaryKey) {
+                            if (!isset($row[$primaryKey]) || empty($row[$primaryKey])) {
+                                $row[$primaryKey] = (string) Str::uuid();
+                            }
+                            return $row;
+                        }, $dataRequest);
+                    }
                 }
 
                 $result = $this->model::insert($dataRequest);
