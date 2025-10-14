@@ -87,7 +87,7 @@ class GenericQueryBuilderService
      *      {"field": "tag_id", "values": ["a","b","c"]}
      *    ]
      */
-    private function buildWhereInQuery(Builder $query, array $whereInData): Builder
+    private function buildWhereInQuery(Builder|Relation $query, array $whereInData): Builder|Relation
     {
         // Support for single whereIn (legacy format)
         if (isset($whereInData['field']) && isset($whereInData['values'])) {
@@ -109,7 +109,7 @@ class GenericQueryBuilderService
     /**
      * Apply orderBy or orderByDesc.
      */
-    private function buildOrderQuery(Builder $query, array $order): Builder
+    private function buildOrderQuery(Builder|Relation $query, array $order): Builder|Relation
     {
         if (!empty($order['field'])) {
             $direction = ($order['order'] ?? 'asc') === 'desc' ? 'desc' : 'asc';
@@ -121,7 +121,7 @@ class GenericQueryBuilderService
     /**
      * Apply select on the query.
      */
-    private function buildSelectQuery(Builder $query, array $select): Builder
+    private function buildSelectQuery(Builder|Relation $query, array $select): Builder|Relation
     {
         if (!empty($select)) {
             $query->select($select);
@@ -132,7 +132,7 @@ class GenericQueryBuilderService
     /**
      * Apply groupBy on the query.
      */
-    private function buildGroupByQuery(Builder $query, array $groupBy): Builder
+    private function buildGroupByQuery(Builder|Relation $query, array $groupBy): Builder|Relation
     {
         if (!empty($groupBy)) {
             $query->groupBy($groupBy);
@@ -154,11 +154,13 @@ class GenericQueryBuilderService
                     $filtersIn = $rel['query']['filtersIn'] ?? null;
                     $order = $rel['query']['order'] ?? null;
                     $groupBy = $rel['query']['groupBy'] ?? null;
+                    $select = $rel['query']['select'] ?? null;
 
                     $this->buildCombinedFiltersQuery($q, $filters, $orFilters);
                     if ($filtersIn) $this->buildWhereInQuery($q, $filtersIn);
                     if ($order) $this->buildOrderQuery($q, $order);
                     if ($groupBy) $this->buildGroupByQuery($q, $groupBy);
+                    if ($select) $this->buildSelectQuery($q, $select);
                 };
             } else {
                 $with[] = $rel['key'];
