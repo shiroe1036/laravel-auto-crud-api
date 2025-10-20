@@ -3,9 +3,13 @@
 namespace FivoTech\LaravelAutoCrud\Services;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use InvalidArgumentException;
 
@@ -14,6 +18,12 @@ class GenericQueryBuilderService
     protected ?Request $request;
     protected Model|string|null $model;
     protected array $config;
+    /**
+     * Relationship pagination constraints mapped by relationship name.
+     *
+     * @var array<string, array>
+     */
+    protected array $relationshipPaginations = [];
 
     public function __construct(?Request $request = null, Model|string|null $model = null)
     {
@@ -146,30 +156,135 @@ class GenericQueryBuilderService
     private function buildRelationship(Builder $query, array $relationships): Builder
     {
         $with = [];
+        $this->relationshipPaginations = [];
         foreach ($relationships as $rel) {
-            if (isset($rel['query'])) {
-                $with[$rel['key']] = function ($q) use ($rel) {
-                    $filters = $rel['query']['filters'] ?? [];
-                    $orFilters = $rel['query']['orFilters'] ?? [];
-                    $filtersIn = $rel['query']['filtersIn'] ?? null;
-                    $order = $rel['query']['order'] ?? null;
-                    $groupBy = $rel['query']['groupBy'] ?? null;
-                    $select = $rel['query']['select'] ?? null;
-
-                    $this->buildCombinedFiltersQuery($q, $filters, $orFilters);
-                    if ($filtersIn) $this->buildWhereInQuery($q, $filtersIn);
-                    if ($order) $this->buildOrderQuery($q, $order);
-                    if ($groupBy) $this->buildGroupByQuery($q, $groupBy);
-                    if ($select) $this->buildSelectQuery($q, $select);
-                };
-            } else {
-                $with[] = $rel['key'];
+            $key = $rel['key'] ?? null;
+            if (!$key) {
+                continue;
             }
+
+            $queryConfig = $rel['query'] ?? [];
+            $paginateConfig = $queryConfig['paginate'] ?? null;
+
+            if ($paginateConfig) {
+                $this->relationshipPaginations[$key] = $queryConfig;
+                continue;
+            }
+
+            if (!empty($queryConfig)) {
+                $with[$key] = function ($q) use ($queryConfig) {
+                    $this->applyRelationshipQueryOptions($q, $queryConfig);
+                };
+                continue;
+            }
+
+            $with[] = $key;
         }
         if (!empty($with)) {
             $query->with($with);
         }
         return $query;
+    }
+
+    /**
+     * Apply configured options on a relationship query builder.
+     */
+    private function applyRelationshipQueryOptions(Builder|Relation $query, array $options): void
+    {
+        $filters = $options['filters'] ?? [];
+        $orFilters = $options['orFilters'] ?? [];
+        $filtersIn = $options['filtersIn'] ?? null;
+        $order = $options['order'] ?? null;
+        $groupBy = $options['groupBy'] ?? null;
+        $select = $options['select'] ?? null;
+
+        $this->buildCombinedFiltersQuery($query, $filters, $orFilters);
+        if ($filtersIn) {
+            $this->buildWhereInQuery($query, $filtersIn);
+        }
+        if ($order) {
+            $this->buildOrderQuery($query, $order);
+        }
+        if ($groupBy) {
+            $this->buildGroupByQuery($query, $groupBy);
+        }
+        if ($select) {
+            $this->buildSelectQuery($query, $select);
+        }
+    }
+
+    /**
+     * Apply relationship pagination on resulting models when requested.
+     */
+    private function applyRelationshipPaginations(mixed $result): mixed
+    {
+        if (empty($this->relationshipPaginations)) {
+            return $result;
+        }
+
+        $models = $this->extractModelsFromResult($result);
+
+        if ($models->isEmpty()) {
+            $this->relationshipPaginations = [];
+            return $result;
+        }
+
+        foreach ($models as $model) {
+            foreach ($this->relationshipPaginations as $relationship => $options) {
+                if (!method_exists($model, $relationship)) {
+                    continue;
+                }
+
+                $relation = $model->{$relationship}();
+
+                if (!$relation instanceof Relation) {
+                    continue;
+                }
+
+                $this->applyRelationshipQueryOptions($relation, $options);
+
+                $paginate = $options['paginate'] ?? [];
+                $perPage = (int) ($paginate['per_page'] ?? ($this->config['default_per_page'] ?? 25));
+                $perPage = $perPage > 0 ? min($perPage, $this->config['max_per_page'] ?? 250) : ($this->config['default_per_page'] ?? 25);
+                $page = max((int) ($paginate['page'] ?? 1), 1);
+
+                $paginator = $relation->paginate($perPage, ['*'], 'page', $page);
+
+                $model->setRelation($relationship, $paginator);
+            }
+        }
+
+        $this->relationshipPaginations = [];
+
+        return $result;
+    }
+
+    /**
+     * Prepare a collection of models from different possible result types.
+     */
+    private function extractModelsFromResult(mixed $result): Collection
+    {
+        if ($result instanceof Model) {
+            return collect([$result]);
+        }
+
+        if ($result instanceof LengthAwarePaginator) {
+            return $result->getCollection();
+        }
+
+        if ($result instanceof Paginator) {
+            return collect($result->items());
+        }
+
+        if ($result instanceof EloquentCollection) {
+            return $result;
+        }
+
+        if ($result instanceof Collection) {
+            return $result;
+        }
+
+        return collect();
     }
 
     /**
@@ -248,6 +363,8 @@ class GenericQueryBuilderService
             ? $query->get()
             : (is_string($this->model) ? $this->model::all() : $this->model::all());
 
+        $result = $this->applyRelationshipPaginations($result);
+
         if ($this->shouldUseCache()) {
             Cache::put($cacheKey, $result, $this->config['cache_ttl'] ?? 3600);
         }
@@ -267,9 +384,11 @@ class GenericQueryBuilderService
 
         $query = $this->buildQuery();
 
-        return $this->hasQueryParameters() && $query
+        $result = $this->hasQueryParameters() && $query
             ? $query->paginate($perPage)
             : (is_string($this->model) ? $this->model::paginate($perPage) : $this->model::paginate($perPage));
+
+        return $this->applyRelationshipPaginations($result);
     }
 
     /**
@@ -291,7 +410,9 @@ class GenericQueryBuilderService
             $query->orderByDesc('id');
         }
 
-        return $query->first();
+        $result = $query->first();
+
+        return $this->applyRelationshipPaginations($result);
     }
 
     /**
