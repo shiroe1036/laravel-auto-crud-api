@@ -24,14 +24,8 @@ Add to your `composer.json`:
 
 ```json
 {
-    "repositories": [
-        {
-            "type": "vcs",
-            "url": "https://github.com/shiroe1036/laravel-auto-crud-api"
-        }
-    ],
     "require": {
-        "fivotech/laravel-auto-crud": "@dev"
+        "fivotech/laravel-auto-crud": "^1.0"
     }
 }
 ```
